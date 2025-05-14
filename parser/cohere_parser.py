@@ -1,279 +1,233 @@
+"""
+Cohere API Parser Module for Resume Parser
+Handles interaction with the Cohere Generate API for resume parsing.
+"""
 import os
 import json
 import cohere
-import streamlit as st
+from dotenv import load_dotenv
 
-def parse_resume(cleaned_text):
-    """
-    Parse the resume text using the Cohere API to extract structured information.
+class CohereParser:
+    """A class for parsing resumes using the Cohere API."""
     
-    Args:
-        cleaned_text (str): The preprocessed resume text
+    def __init__(self):
+        """Initialize the Cohere parser with API key from environment variables."""
+        # Load environment variables
+        load_dotenv()
         
-    Returns:
-        dict: A dictionary containing the parsed resume information
-    """
-    # Get the API key from environment variables
-    api_key = os.getenv("COHERE_API_KEY")
-    if not api_key:
-        raise ValueError("COHERE_API_KEY not found in environment variables")
-    
-    # Initialize the Cohere client
-    co = cohere.Client(api_key)
-    
-    # Create the prompt for Cohere
-    prompt = create_cohere_prompt(cleaned_text)
-    
-    try:
-        # Call the Cohere Generate API
-        response = co.generate(
-            prompt=prompt,
-            max_tokens=2500,
-            temperature=0.1,  # Low temperature for more focused extraction
-            k=0,
-            p=0.75,
-            stop_sequences=["---"],
-            return_likelihoods='NONE'
-        )
+        # Get API key from environment
+        self.api_key = os.getenv('COHERE_API_KEY')
+        if not self.api_key:
+            raise ValueError("COHERE_API_KEY environment variable not found")
         
-        # Extract the generated text
-        generated_text = response.generations[0].text
+        # Initialize Cohere client
+        self.client = cohere.Client(self.api_key)
+    
+    def parse_resume(self, text):
+        """
+        Parse resume text using Cohere API.
         
-        # Parse the JSON from the response
-        # We need to find where the JSON starts and ends
-        try:
-            # Try to find JSON-formatted content
-            start_idx = generated_text.find('{')
-            end_idx = generated_text.rfind('}') + 1
+        Args:
+            text (str): Cleaned resume text to parse
             
-            if start_idx >= 0 and end_idx > start_idx:
-                json_str = generated_text[start_idx:end_idx]
-                parsed_data = json.loads(json_str)
-            else:
-                # If no JSON found, create a fallback structure
-                st.warning("Structured JSON not found in the API response. Using best-effort parsing.")
-                parsed_data = fallback_parser(generated_text)
-                
+        Returns:
+            dict: Structured resume data
+        """
+        try:
+            # Craft the prompt for Cohere API
+            prompt = self._create_parsing_prompt(text)
+            
+            # Call Cohere Generate API
+            response = self.client.generate(
+                prompt=prompt,
+                max_tokens=2000,
+                temperature=0.2,  # Lower temperature for more deterministic output
+                k=0,
+                p=0.75,
+                frequency_penalty=0.1,
+                presence_penalty=0.1,
+                stop_sequences=["```"],
+                return_likelihoods="NONE"
+            )
+            
+            # Extract and parse JSON from response
+            parsed_data = self._extract_json_from_response(response)
             return parsed_data
             
-        except json.JSONDecodeError:
-            # If JSON parsing fails, use a fallback parser
-            st.warning("Failed to parse JSON from the API response. Using best-effort parsing.")
-            return fallback_parser(generated_text)
+        except Exception as e:
+            raise Exception(f"Error parsing resume with Cohere API: {str(e)}")
+    
+    def _create_parsing_prompt(self, text):
+        """
+        Create a prompt for Cohere API to parse resume.
+        
+        Args:
+            text (str): Resume text to parse
             
-    except Exception as e:
-        st.error(f"Error communicating with Cohere API: {str(e)}")
-        raise
-        
-def create_cohere_prompt(resume_text):
-    """
-    Create a prompt for the Cohere API to extract resume information.
-    
-    Args:
-        resume_text (str): The preprocessed resume text
-        
-    Returns:
-        str: The prompt for the Cohere API
-    """
-    prompt = f"""
-    You are an expert resume parser. I will provide you with the text of a resume, and your task is to extract key information and organize it into a structured JSON format.
+        Returns:
+            str: Complete prompt for Cohere API
+        """
+        # Create a detailed prompt that instructs the model how to parse the resume
+        prompt = f"""As an expert resume analyzer, extract structured information from the resume below. 
+Identify and organize the following sections:
 
-    Here's the resume text:
-    ```
-    {resume_text}
-    ```
+1. Full Name
+2. Contact Information (Email, Phone Number, Location, LinkedIn/Portfolio URLs)
+3. Professional Summary
+4. Skills (both technical and soft skills)
+5. Work Experience (for each position: company name, job title, dates, location, and key responsibilities/achievements)
+6. Education (for each entry: institution, degree, field of study, graduation date)
+7. Certifications/Additional Training
+8. Projects (if any)
+9. Languages (if any)
+10. Interests/Hobbies (if present)
 
-    Please extract the following information and format it exactly as a JSON object with these fields:
-    1. full_name: The candidate's full name
-    2. contact_info: 
-       - email: Email address
-       - phone: Phone number
-       - linkedin: LinkedIn profile (if available)
-       - location: Geographic location (if available)
-    3. education: An array of education entries, each with:
-       - degree: Degree obtained
-       - institution: School/University name
-       - date_range: Time period (start-end)
-       - gpa: GPA (if available)
-       - details: Additional details (if available)
-    4. work_experience: An array of work experiences, each with:
-       - title: Job title
-       - company: Company name
-       - date_range: Employment period
-       - location: Job location (if available)
-       - responsibilities: Array of key responsibilities/achievements
-    5. skills: Array of skills grouped by category when possible (e.g., technical_skills, soft_skills, languages)
-    6. certifications: Array of certifications (if available)
-    7. projects: Array of projects (if available), each with title, description, and technologies used
-    8. summary: Professional summary or objective statement (if available)
+Format the extraction as a valid JSON object with clear organization.
 
-    Return ONLY the JSON object without any explanation or additional text. Ensure the JSON is valid and properly formatted.
-    """
+Resume text:
+```
+{text}
+```
+
+Return the extracted information in the following JSON format:
+```json
+{{
+  "full_name": "",
+  "contact_info": {{
+    "email": "",
+    "phone": "",
+    "location": "",
+    "linkedin": "",
+    "portfolio": ""
+  }},
+  "summary": "",
+  "skills": {{
+    "technical": [],
+    "soft": []
+  }},
+  "work_experience": [
+    {{
+      "company": "",
+      "job_title": "",
+      "date_range": "",
+      "location": "",
+      "description": ""
+    }}
+  ],
+  "education": [
+    {{
+      "institution": "",
+      "degree": "",
+      "field_of_study": "",
+      "graduation_date": ""
+    }}
+  ],
+  "certifications": [],
+  "projects": [
+    {{
+      "name": "",
+      "description": "",
+      "technologies": []
+    }}
+  ],
+  "languages": [],
+  "interests": []
+}}
+```
+Ensure that all JSON fields are properly formatted and escaped. Leave fields empty if the information isn't available in the resume.
+"""
+        return prompt
     
-    return prompt
-
-def fallback_parser(text):
-    """
-    A fallback parser to extract information if JSON parsing fails.
-    
-    Args:
-        text (str): The text returned by the Cohere API
+    def _extract_json_from_response(self, response):
+        """
+        Extract and parse JSON from Cohere API response.
         
-    Returns:
-        dict: A dictionary with the parsed information
-    """
-    # Create a basic structure
-    parsed_data = {
-        "full_name": "",
-        "contact_info": {
-            "email": "",
-            "phone": "",
-            "linkedin": "",
-            "location": ""
-        },
-        "education": [],
-        "work_experience": [],
-        "skills": [],
-        "certifications": [],
-        "projects": [],
-        "summary": ""
-    }
-    
-    # Try to extract sections from the text
-    sections = text.split("\n\n")
-    
-    for section in sections:
-        section = section.strip()
-        
-        # Try to identify what type of section this is and extract the data
-        if "full_name" in section.lower():
-            lines = section.split("\n")
-            for line in lines:
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    if "name" in key.lower():
-                        parsed_data["full_name"] = value.strip()
-                        
-        elif "contact" in section.lower() or "email" in section.lower():
-            lines = section.split("\n")
-            for line in lines:
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    key = key.lower().strip()
-                    value = value.strip()
-                    
-                    if "email" in key:
-                        parsed_data["contact_info"]["email"] = value
-                    elif "phone" in key:
-                        parsed_data["contact_info"]["phone"] = value
-                    elif "linkedin" in key:
-                        parsed_data["contact_info"]["linkedin"] = value
-                    elif "location" in key:
-                        parsed_data["contact_info"]["location"] = value
-                        
-        elif "education" in section.lower():
-            # Extract education information
-            education_entry = {
-                "degree": "",
-                "institution": "",
-                "date_range": "",
-                "gpa": "",
-                "details": ""
-            }
+        Args:
+            response: Cohere API response
             
-            lines = section.split("\n")
-            for i, line in enumerate(lines):
-                if i == 0:  # Skip the "EDUCATION" header
-                    continue
-                    
-                line = line.strip()
-                if not line:
-                    continue
-                    
-                if i == 1:  # Assume this is degree + institution
-                    parts = line.split(",", 1)
-                    if len(parts) > 1:
-                        education_entry["institution"] = parts[0].strip()
-                        education_entry["degree"] = parts[1].strip()
-                    else:
-                        education_entry["institution"] = line
-                elif "gpa" in line.lower():
-                    education_entry["gpa"] = line
-                elif any(month in line.lower() for month in ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]):
-                    education_entry["date_range"] = line
-                else:
-                    education_entry["details"] += line + " "
-                    
-            if education_entry["institution"]:
-                parsed_data["education"].append(education_entry)
-                
-        elif "experience" in section.lower() or "work" in section.lower():
-            # Extract work experience
-            work_entry = {
-                "title": "",
-                "company": "",
-                "date_range": "",
-                "location": "",
-                "responsibilities": []
-            }
+        Returns:
+            dict: Parsed JSON data
+        """
+        try:
+            # Extract the text from the response
+            generated_text = response.generations[0].text
             
-            lines = section.split("\n")
-            for i, line in enumerate(lines):
-                if i == 0:  # Skip the "EXPERIENCE" header
-                    continue
-                    
-                line = line.strip()
-                if not line:
-                    continue
-                    
-                if i == 1:  # Assume this is job title + company
-                    parts = line.split("at", 1)
-                    if len(parts) > 1:
-                        work_entry["title"] = parts[0].strip()
-                        work_entry["company"] = parts[1].strip()
-                    else:
-                        work_entry["title"] = line
-                elif any(month in line.lower() for month in ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]):
-                    work_entry["date_range"] = line
-                elif line.startswith(("*", "-", "•")):
-                    work_entry["responsibilities"].append(line.lstrip("*- •").strip())
-                    
-            if work_entry["title"] or work_entry["company"]:
-                parsed_data["work_experience"].append(work_entry)
-                
-        elif "skill" in section.lower():
-            # Extract skills
-            lines = section.split("\n")
-            for i, line in enumerate(lines):
-                if i == 0:  # Skip the "SKILLS" header
-                    continue
-                    
-                line = line.strip()
-                if not line:
-                    continue
-                    
-                if ":" in line:
-                    # This is likely a skill category
-                    category, skills = line.split(":", 1)
-                    skills_list = [s.strip() for s in skills.split(",")]
-                    parsed_data["skills"].extend(skills_list)
-                else:
-                    # Individual skill or list of skills
-                    skills_list = [s.strip() for s in line.split(",")]
-                    parsed_data["skills"].extend(skills_list)
-                    
-        elif "summary" in section.lower() or "objective" in section.lower():
-            # Extract summary
-            lines = section.split("\n")
-            for i, line in enumerate(lines):
-                if i == 0:  # Skip the header
-                    continue
-                    
-                line = line.strip()
-                if line:
-                    parsed_data["summary"] += line + " "
-                    
-    # Clean up any empty strings
-    parsed_data["summary"] = parsed_data["summary"].strip()
+            # Find JSON content between ```json and ``` markers if present
+            json_pattern = r'```json\s*([\s\S]*?)\s*```'
+            import re
+            json_match = re.search(json_pattern, generated_text)
+            
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                # If no markers, assume the entire text is JSON
+                json_str = generated_text
+            
+            # Clean up any remaining markdown or non-JSON content
+            json_str = json_str.strip()
+            
+            # Parse the JSON
+            parsed_data = json.loads(json_str)
+            
+            # Validate the structure
+            self._validate_parsed_data(parsed_data)
+            
+            return parsed_data
+            
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse JSON from API response: {str(e)}")
+        except Exception as e:
+            raise Exception(f"Error processing API response: {str(e)}")
     
-    return parsed_data
+    def _validate_parsed_data(self, data):
+        """
+        Validate the structure of parsed resume data.
+        
+        Args:
+            data (dict): Parsed resume data to validate
+            
+        Returns:
+            bool: True if valid, raises exception otherwise
+        """
+        # Required top-level keys
+        required_keys = [
+            'full_name', 
+            'contact_info', 
+            'skills', 
+            'work_experience', 
+            'education'
+        ]
+        
+        # Check for required keys
+        for key in required_keys:
+            if key not in data:
+                data[key] = "" if key in ['full_name'] else {} if key in ['contact_info', 'skills'] else []
+        
+        # Ensure contact_info structure
+        if 'contact_info' in data and not isinstance(data['contact_info'], dict):
+            data['contact_info'] = {}
+        
+        # Ensure skills structure
+        if 'skills' in data and not isinstance(data['skills'], dict):
+            if isinstance(data['skills'], list):
+                data['skills'] = {
+                    'technical': data['skills'],
+                    'soft': []
+                }
+            else:
+                data['skills'] = {
+                    'technical': [],
+                    'soft': []
+                }
+        
+        # Convert any None values to empty strings, lists, or dicts
+        for key in data:
+            if data[key] is None:
+                if key in ['full_name', 'summary']:
+                    data[key] = ""
+                elif key in ['work_experience', 'education', 'certifications', 'projects', 'languages', 'interests']:
+                    data[key] = []
+                elif key in ['contact_info', 'skills']:
+                    data[key] = {}
+        
+        return True

@@ -1,115 +1,168 @@
-import re
-import os
-import streamlit as st
-import json
-from pathlib import Path
+"""
+Utility functions for the Resume Parser application.
+Contains helper methods used across different modules.
+"""
 
-def ensure_directory_structure():
+import os
+import re
+from typing import Dict, Any, Optional
+from dotenv import load_dotenv
+
+
+def load_api_key() -> str:
     """
-    Ensure that all necessary directories exist in the project.
-    This is helpful for first-time setup.
+    Load Cohere API key from environment variables.
+    
+    Returns:
+        API key string
+    
+    Raises:
+        ValueError: If API key is not found
     """
-    # Define all directories that should exist
-    directories = [
-        "gui",
-        "reader",
-        "preprocessor",
-        "parser",
-        "display",
-        "exporter",
-        "utils"
+    load_dotenv()
+    api_key = os.getenv("COHERE_API_KEY")
+    
+    if not api_key:
+        raise ValueError(
+            "Cohere API key not found. Please add COHERE_API_KEY to your .env file."
+        )
+    
+    return api_key
+
+
+def clean_text(text: str) -> str:
+    """
+    Clean and normalize text from various resume formats.
+    
+    Args:
+        text: Raw text extracted from resume file
+        
+    Returns:
+        Cleaned text ready for processing
+    """
+    # Remove excessive whitespace
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Normalize bullet points
+    text = re.sub(r'[•⁃◦▪▫●]', '* ', text)
+    
+    # Normalize dashes
+    text = re.sub(r'[–—―]', '-', text)
+    
+    # Fix common OCR/PDF extraction issues
+    text = text.replace('|', 'I')  # Fix pipe character often misrecognized as 'I'
+    
+    # Remove page numbers (common in PDFs)
+    text = re.sub(r'\n\s*\d+\s*\n', '\n', text)
+    
+    # Ensure consistency in section headers (capitalize them)
+    sections = ['EDUCATION', 'EXPERIENCE', 'SKILLS', 'PROJECTS', 'CERTIFICATIONS', 
+                'WORK EXPERIENCE', 'PROFESSIONAL EXPERIENCE', 'ACADEMIC PROJECTS']
+    
+    for section in sections:
+        # Find case-insensitive matches and replace with uppercase version
+        pattern = re.compile(re.escape(section), re.IGNORECASE)
+        text = pattern.sub(section, text)
+    
+    return text.strip()
+
+
+def extract_contact_info(text: str) -> Dict[str, Optional[str]]:
+    """
+    Extract basic contact information using regex patterns.
+    This is a fallback method if the Cohere API doesn't extract this information.
+    
+    Args:
+        text: Cleaned text from resume
+        
+    Returns:
+        Dictionary with extracted email and phone
+    """
+    contact_info = {
+        "email": None,
+        "phone": None
+    }
+    
+    # Extract email using regex
+    email_pattern = r'[\w\.-]+@[\w\.-]+\.\w+'
+    email_match = re.search(email_pattern, text)
+    if email_match:
+        contact_info["email"] = email_match.group(0)
+    
+    # Extract phone number (supports various formats)
+    phone_patterns = [
+        r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',  # 123-456-7890, 123.456.7890, 123 456 7890
+        r'\b\(\d{3}\)[-.\s]?\d{3}[-.\s]?\d{4}\b',  # (123) 456-7890
+        r'\b\+\d{1,2}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',  # +1-123-456-7890
     ]
     
-    # Create directories if they don't exist
-    for directory in directories:
-        if not os.path.exists(directory):
-            os.makedirs(directory)
-            # Create an __init__.py file to make the directory a package
-            with open(os.path.join(directory, "__init__.py"), "w") as f:
-                f.write("# Package initialization file")
+    for pattern in phone_patterns:
+        phone_match = re.search(pattern, text)
+        if phone_match:
+            contact_info["phone"] = phone_match.group(0)
+            break
+    
+    return contact_info
 
-def extract_email(text):
+
+def format_prompt_for_cohere(resume_text: str) -> str:
     """
-    Extract email address from text using regex.
+    Format the resume text into a prompt for the Cohere API.
     
     Args:
-        text (str): Text to search for email
+        resume_text: Cleaned text from resume
         
     Returns:
-        str: Extracted email or empty string if not found
+        Formatted prompt string
     """
-    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-    match = re.search(email_pattern, text)
-    return match.group(0) if match else ""
+    prompt = f"""
+    Parse the following resume and extract these fields:
+    - full_name: the candidate's full name
+    - email: the candidate's email address
+    - phone: the candidate's phone number
+    - skills: list of technical and professional skills
+    - education: list of education entries with degree, institution, and year
+    - experience: list of work experience entries with title, company, duration, and description
+    - projects: list of relevant projects (if any)
+    - certifications: list of certifications (if any)
 
-def extract_phone(text):
+    Format the response as JSON.
+
+    Resume:
+    {resume_text}
     """
-    Extract phone number from text using regex.
+    return prompt
+
+
+def validate_resume_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validate and clean up parsed resume data.
+    Ensures that all expected fields are present and in the correct format.
     
     Args:
-        text (str): Text to search for phone number
+        data: Dictionary with parsed resume data
         
     Returns:
-        str: Extracted phone or empty string if not found
+        Validated and cleaned data dictionary
     """
-    # This pattern tries to match various phone number formats
-    phone_pattern = r'(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}'
-    match = re.search(phone_pattern, text)
-    return match.group(0) if match else ""
-
-def extract_linkedin(text):
-    """
-    Extract LinkedIn profile URL from text using regex.
+    # Ensure all expected fields exist (with defaults if missing)
+    validated = {
+        "full_name": data.get("full_name", ""),
+        "email": data.get("email", ""),
+        "phone": data.get("phone", ""),
+        "skills": data.get("skills", []),
+        "education": data.get("education", []),
+        "experience": data.get("experience", []),
+        "projects": data.get("projects", []),
+        "certifications": data.get("certifications", [])
+    }
     
-    Args:
-        text (str): Text to search for LinkedIn URL
-        
-    Returns:
-        str: Extracted LinkedIn URL or empty string if not found
-    """
-    linkedin_pattern = r'(https?://)?(www\.)?linkedin\.com/in/[\w-]+'
-    match = re.search(linkedin_pattern, text)
-    return match.group(0) if match else ""
-
-def is_valid_json(json_str):
-    """
-    Check if a string is valid JSON.
+    # Ensure lists are actually lists
+    for field in ["skills", "education", "experience", "projects", "certifications"]:
+        if not isinstance(validated[field], list):
+            if validated[field]:  # If it has a value but isn't a list
+                validated[field] = [validated[field]]
+            else:
+                validated[field] = []
     
-    Args:
-        json_str (str): String to check
-        
-    Returns:
-        bool: True if valid JSON, False otherwise
-    """
-    try:
-        json.loads(json_str)
-        return True
-    except:
-        return False
-
-def get_file_extension(filename):
-    """
-    Get the file extension from a filename.
-    
-    Args:
-        filename (str): Name of the file
-        
-    Returns:
-        str: File extension in lowercase
-    """
-    return Path(filename).suffix.lower()[1:]  # Remove the dot
-
-def truncate_text(text, max_length=100):
-    """
-    Truncate text to a maximum length and add ellipsis if needed.
-    
-    Args:
-        text (str): Text to truncate
-        max_length (int): Maximum length
-        
-    Returns:
-        str: Truncated text
-    """
-    if len(text) <= max_length:
-        return text
-    return text[:max_length] + "..."
+    return validated

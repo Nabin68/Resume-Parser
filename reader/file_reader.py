@@ -1,66 +1,95 @@
+"""
+File Reader Module for the Resume Parser Application
+Handles reading different file types and extracting text content.
+"""
+import os
 import pdfplumber
-import docx
-import io
-import streamlit as st
+from docx import Document
 
-def read_resume(uploaded_file):
-    """
-    Read the content of the uploaded resume file based on its format.
+class FileReader:
+    """A class for reading and extracting text from various file types."""
     
-    Args:
-        uploaded_file: The uploaded file object from Streamlit
+    def read_file(self, file_path):
+        """
+        Read the content of a file based on its extension.
         
-    Returns:
-        str: The extracted text content of the resume
-    """
-    file_extension = uploaded_file.name.split('.')[-1].lower()
-    
-    try:
-        if file_extension == 'pdf':
-            return read_pdf(uploaded_file)
-        elif file_extension == 'docx':
-            return read_docx(uploaded_file)
-        elif file_extension == 'txt':
-            return read_txt(uploaded_file)
+        Args:
+            file_path (str): Path to the file to be read
+            
+        Returns:
+            str: Text content of the file or None if the file type is not supported
+        """
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}")
+        
+        _, file_extension = os.path.splitext(file_path.lower())
+        
+        if file_extension == '.pdf':
+            return self._read_pdf(file_path)
+        elif file_extension == '.docx':
+            return self._read_docx(file_path)
+        elif file_extension == '.txt':
+            return self._read_txt(file_path)
         else:
             raise ValueError(f"Unsupported file format: {file_extension}")
     
-    except Exception as e:
-        st.error(f"Error reading file: {str(e)}")
-        raise
-
-def read_pdf(pdf_file):
-    """Extract text from PDF files using pdfplumber"""
-    text = ""
-    try:
-        with pdfplumber.open(pdf_file) as pdf:
-            for page in pdf.pages:
-                text += page.extract_text() or ""
-        return text
-    except Exception as e:
-        raise Exception(f"PDF reading error: {str(e)}")
-
-def read_docx(docx_file):
-    """Extract text from DOCX files using python-docx"""
-    try:
-        doc = docx.Document(io.BytesIO(docx_file.getvalue()))
-        text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+    def _read_pdf(self, file_path):
+        """
+        Extract text from a PDF file.
         
-        # Also extract tables if present
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    text += cell.text + " "
-                text += "\n"
-                
-        return text
-    except Exception as e:
-        raise Exception(f"DOCX reading error: {str(e)}")
-
-def read_txt(txt_file):
-    """Extract text from TXT files"""
-    try:
-        text = txt_file.getvalue().decode('utf-8')
-        return text
-    except Exception as e:
-        raise Exception(f"TXT reading error: {str(e)}")
+        Args:
+            file_path (str): Path to the PDF file
+            
+        Returns:
+            str: Extracted text from the PDF
+        """
+        text = ""
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    text += page.extract_text() or ""
+                    text += "\n\n"  # Add spacing between pages
+            return text.strip()
+        except Exception as e:
+            raise Exception(f"Error reading PDF file: {str(e)}")
+    
+    def _read_docx(self, file_path):
+        """
+        Extract text from a DOCX file.
+        
+        Args:
+            file_path (str): Path to the DOCX file
+            
+        Returns:
+            str: Extracted text from the DOCX
+        """
+        try:
+            doc = Document(file_path)
+            paragraphs = [p.text for p in doc.paragraphs]
+            text = "\n".join(paragraphs)
+            return text.strip()
+        except Exception as e:
+            raise Exception(f"Error reading DOCX file: {str(e)}")
+    
+    def _read_txt(self, file_path):
+        """
+        Read content from a text file.
+        
+        Args:
+            file_path (str): Path to the text file
+            
+        Returns:
+            str: Content of the text file
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                return file.read().strip()
+        except UnicodeDecodeError:
+            # Try with a different encoding if UTF-8 fails
+            try:
+                with open(file_path, 'r', encoding='latin-1') as file:
+                    return file.read().strip()
+            except Exception as e:
+                raise Exception(f"Error reading text file: {str(e)}")
+        except Exception as e:
+            raise Exception(f"Error reading text file: {str(e)}")
